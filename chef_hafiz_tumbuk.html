@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chef Hafiz: Tumbuk Jawapan Betul!</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #fde047; /* Yellow background fallback */
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+        }
+
+        #webcam-video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror the video */
+            z-index: 1;
+            opacity: 0.7; /* Slightly dim so game objects pop out */
+        }
+
+        #game-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+            pointer-events: none; /* Let HTML UI underneath catch clicks if needed, though mostly gesture based */
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .interactive-ui {
+            pointer-events: auto;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            border: 4px solid #f97316;
+        }
+
+        /* Hand Guide Icon Animation */
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .anim-pulse {
+            animation: pulse 2s infinite;
+        }
+
+        #question-banner {
+            transition: all 0.3s ease;
+            transform: translateY(-100%);
+        }
+        #question-banner.show {
+            transform: translateY(0);
+        }
+
+        .floating-text {
+            text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Webcam Feed -->
+    <video id="webcam-video" autoplay playsinline></video>
+    
+    <!-- Three.js Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- UI Layer -->
+    <div id="ui-layer">
+        
+        <!-- Top HUD (Score, Level, Lives, Timer) -->
+        <div class="flex justify-between items-start p-4 w-full">
+            <div id="hud-stats" class="glass-panel p-3 px-6 hidden flex-col sm:flex-row gap-4 font-bold text-lg text-gray-800">
+                <div class="flex items-center gap-2"><span class="text-2xl">⭐</span> Skor: <span id="score-text">0</span></div>
+                <div class="flex items-center gap-2"><span class="text-2xl">❤️</span> Nyawa: <span id="lives-text">3</span></div>
+                <div class="flex items-center gap-2"><span class="text-2xl">🏆</span> Tahap: <span id="level-text">1</span>/10</div>
+            </div>
+            
+            <div id="hud-timer" class="glass-panel p-3 px-6 hidden items-center justify-center font-bold text-2xl text-red-600 min-w-[100px]">
+                ⏱️ <span id="timer-text">15</span>s
+            </div>
+        </div>
+
+        <!-- Question Banner -->
+        <div id="question-banner" class="absolute top-24 left-1/2 transform -translate-x-1/2 w-11/12 max-w-3xl glass-panel p-6 text-center shadow-2xl hidden">
+            <h2 class="text-sm font-bold text-orange-600 uppercase tracking-widest mb-2">Soalan Chef Hafiz</h2>
+            <h1 id="question-text" class="text-2xl md:text-3xl font-extrabold text-gray-800 leading-tight">Apakah yang perlu dipakai sebelum mula memasak?</h1>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="interactive-ui absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-50">
+            <div class="bg-white rounded-3xl p-8 max-w-lg text-center shadow-2xl border-8 border-orange-500 relative overflow-hidden">
+                <div class="absolute -top-10 -right-10 text-9xl opacity-20">👨‍🍳</div>
+                <h1 class="text-5xl font-black text-orange-600 mb-4 tracking-tighter">CHEF HAFIZ</h1>
+                <h2 class="text-2xl font-bold text-gray-800 mb-6 uppercase">Tumbuk & Jawab!</h2>
+                
+                <div class="bg-orange-100 p-4 rounded-xl mb-6 text-left border border-orange-300">
+                    <p class="font-bold text-orange-800 mb-2">Arahan Permainan:</p>
+                    <ul class="list-disc pl-5 text-gray-700 font-medium space-y-1">
+                        <li>Pastikan anda berada di hadapan kamera.</li>
+                        <li>Gunakan tangan anda untuk mengawal <strong>Sarung Tangan Tinju</strong>.</li>
+                        <li><strong>GENGGAM (Grab)</strong> tangan untuk sasar & kumpul tenaga.</li>
+                        <li><strong>BUKA (Release)</strong> genggaman untuk TUMBUK jawapan yang betul!</li>
+                    </ul>
+                </div>
+
+                <div id="loading-status" class="text-orange-500 font-bold mb-4 anim-pulse">
+                    Memuatkan AI Kamera & Grafik 3D... Sila tunggu.
+                </div>
+
+                <button id="start-btn" class="hidden w-full bg-gradient-to-r from-orange-500 to-red-500 text-white font-black text-2xl py-4 rounded-full shadow-lg hover:from-orange-400 hover:to-red-400 transform hover:scale-105 transition-all">
+                    MULA MAIN SEKARANG!
+                </button>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameover-screen" class="interactive-ui absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-50 hidden">
+            <div class="bg-white rounded-3xl p-8 max-w-md text-center shadow-2xl border-8 border-red-500">
+                <h1 id="gameover-title" class="text-5xl font-black text-red-600 mb-2">TAMAT!</h1>
+                <p id="gameover-msg" class="text-xl font-bold text-gray-700 mb-6">Cubaan yang baik!</p>
+                
+                <div class="bg-gray-100 p-4 rounded-xl mb-6">
+                    <p class="text-gray-500 font-medium">Skor Akhir Anda</p>
+                    <p id="final-score" class="text-6xl font-black text-orange-500">0</p>
+                </div>
+
+                <button onclick="window.location.reload()" class="w-full bg-gradient-to-r from-green-500 to-teal-500 text-white font-black text-xl py-4 rounded-full shadow-lg hover:scale-105 transition-all">
+                    MAIN SEMULA
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Game Data & Questions
+        const quizData = [
+            { q: "Apakah pakaian keselamatan yang perlu dipakai sebelum mula memasak?", options: ["Apron", "Baju Tidur"], correct: 0 },
+            { q: "Selepas menggunakan pisau, kita mestilah...", options: ["Biar di meja", "Basuh & Simpan"], correct: 1 },
+            { q: "Jika air tumpah di lantai dapur, tindakan segera ialah...", options: ["Lap segera", "Biar kering"], correct: 0 },
+            { q: "Di manakah sisa makanan perlu dibuang?", options: ["Sinki", "Tong Sampah"], correct: 1 },
+            { q: "Sebelum memegang makanan, kita WAJIB...", options: ["Basuh tangan", "Pakai losyen"], correct: 0 },
+            { q: "Alatan tajam seperti gunting dan pisau perlu disimpan di...", options: ["Laci tertutup", "Atas lantai"], correct: 0 },
+            { q: "Jika terbau gas bocor di dapur, apakah yang perlu dilakukan?", options: ["Pasang kipas", "Buka tingkap"], correct: 1 },
+            { q: "Kain buruk yang kotor dan berbau perlu...", options: ["Dicuci", "Guna semula"], correct: 0 },
+            { q: "Bagaimanakah cara membawa pisau dengan selamat?", options: ["Mata ke bawah", "Mata ke depan"], correct: 0 },
+            { q: "Dapur yang bersih dan kemas akan menjauhkan haiwan perosak seperti...", options: ["Kucing", "Lipas & Tikus"], correct: 1 }
+        ];
+
+        // Game State Variables
+        let currentQuestion = 0;
+        let score = 0;
+        let lives = 3;
+        let timer = 15;
+        let timerInterval;
+        let gameState = 'INIT'; // INIT, MENU, PLAYING, GAMEOVER
+        let canPunch = true;
+
+        // Three.js Variables
+        let scene, camera, renderer;
+        let leftTargetBox, rightTargetBox;
+        let cursorGlove;
+        let raycaster, mouseVector;
+        let particles = [];
+        
+        // MediaPipe Variables
+        let videoElement = document.getElementById('webcam-video');
+        let isFist = false;
+        let wasFist = false;
+        let handX = 0;
+        let handY = 0;
+        let modelLoaded = false;
+
+        // DOM Elements
+        const scoreEl = document.getElementById('score-text');
+        const livesEl = document.getElementById('lives-text');
+        const levelEl = document.getElementById('level-text');
+        const timerEl = document.getElementById('timer-text');
+        const questionText = document.getElementById('question-text');
+        const startBtn = document.getElementById('start-btn');
+        const loadingStatus = document.getElementById('loading-status');
+        const startScreen = document.getElementById('start-screen');
+        const gameoverScreen = document.getElementById('gameover-screen');
+        const hudStats = document.getElementById('hud-stats');
+        const hudTimer = document.getElementById('hud-timer');
+        const questionBanner = document.getElementById('question-banner');
+
+        function initThreeJS() {
+            const canvas = document.getElementById('game-canvas');
+            scene = new THREE.Scene();
+            
+            // Camera setup to match common webcam aspect
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.z = 5;
+
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(0, 10, 5);
+            scene.add(dirLight);
+
+            // Create Targets (Answers)
+            const targetGeo = new THREE.BoxGeometry(3, 2, 0.5);
+            
+            // Left Target
+            const leftMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            leftTargetBox = new THREE.Mesh(targetGeo, leftMat);
+            leftTargetBox.position.set(-2.5, 0, -2);
+            leftTargetBox.userData = { id: 0 };
+            scene.add(leftTargetBox);
+
+            // Right Target
+            const rightMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            rightTargetBox = new THREE.Mesh(targetGeo, rightMat);
+            rightTargetBox.position.set(2.5, 0, -2);
+            rightTargetBox.userData = { id: 1 };
+            scene.add(rightTargetBox);
+
+            // Create Cursor (Boxing Glove / Fist)
+            const gloveGeo = new THREE.SphereGeometry(0.4, 32, 32);
+            const gloveMat = new THREE.MeshPhongMaterial({ color: 0xef4444 }); // Red
+            cursorGlove = new THREE.Mesh(gloveGeo, gloveMat);
+            cursorGlove.position.z = 2;
+            scene.add(cursorGlove);
+
+            // Raycaster for Punching
+            raycaster = new THREE.Raycaster();
+            mouseVector = new THREE.Vector2();
+
+            window.addEventListener('resize', onWindowResize, false);
+            
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            // Adjust box positions based on screen width
+            const isMobile = window.innerWidth < 768;
+            leftTargetBox.position.set(isMobile ? -1.5 : -3, isMobile ? 1.5 : 0, -2);
+            rightTargetBox.position.set(isMobile ? 1.5 : 3, isMobile ? -1.5 : 0, -2);
+            leftTargetBox.scale.setScalar(isMobile ? 0.7 : 1);
+            rightTargetBox.scale.setScalar(isMobile ? 0.7 : 1);
+        }
+
+        function createTextTexture(text, bgColor = '#ffffff', textColor = '#1f2937') {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            
+            // Background with rounded rect appearance (simulated by drawing smaller rect inside)
+            ctx.fillStyle = bgColor;
+            ctx.fillRect(0, 0, 512, 256);
+            
+            // Border
+            ctx.lineWidth = 15;
+            ctx.strokeStyle = '#f97316';
+            ctx.strokeRect(0, 0, 512, 256);
+
+            // Text
+            ctx.fillStyle = textColor;
+            ctx.font = 'bold 45px Inter, Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Simple word wrap
+            const words = text.split(' ');
+            let line = '';
+            let lines = [];
+            for(let n = 0; n < words.length; n++) {
+                let testLine = line + words[n] + ' ';
+                let metrics = ctx.measureText(testLine);
+                let testWidth = metrics.width;
+                if (testWidth > 450 && n > 0) {
+                    lines.push(line);
+                    line = words[n] + ' ';
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line);
+
+            let startY = 128 - ((lines.length - 1) * 25);
+            for(let k = 0; k < lines.length; k++) {
+                ctx.fillText(lines[k], 256, startY + (k * 50));
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        function updateTargetsContent() {
+            const q = quizData[currentQuestion];
+            leftTargetBox.material.map = createTextTexture(q.options[0]);
+            leftTargetBox.material.needsUpdate = true;
+            leftTargetBox.userData.isCorrect = (q.correct === 0);
+
+            rightTargetBox.material.map = createTextTexture(q.options[1]);
+            rightTargetBox.material.needsUpdate = true;
+            rightTargetBox.userData.isCorrect = (q.correct === 1);
+        }
+
+        function checkFist(landmarks) {
+            // Simplified fist detection: check distance of fingertips to wrist
+            // Wrist is landmark 0. Index tip is 8, Middle 12, Ring 16, Pinky 20.
+            // MCP joints are 5, 9, 13, 17.
+            // If fingertips are closer to wrist than MCP joints, it's folded (fist).
+            const tips = [8, 12, 16, 20];
+            const mcps = [5, 9, 13, 17];
+            
+            let foldedCount = 0;
+            const wrist = landmarks[0];
+
+            function dist(p1, p2) {
+                return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+            }
+
+            for(let i=0; i<4; i++) {
+                const tipDist = dist(landmarks[tips[i]], wrist);
+                const mcpDist = dist(landmarks[mcps[i]], wrist);
+                if (tipDist < mcpDist * 1.2) { // Allow slight buffer
+                    foldedCount++;
+                }
+            }
+            // Thumb (tip 4, mcp 2)
+            const thumbTipDist = dist(landmarks[4], wrist);
+            const thumbMcpDist = dist(landmarks[2], wrist);
+            if (thumbTipDist < thumbMcpDist * 1.5) foldedCount++;
+
+            return foldedCount >= 3; // If at least 3 fingers are folded, consider it a fist
+        }
+
+        function onResults(results) {
+            if (!modelLoaded) {
+                modelLoaded = true;
+                loadingStatus.style.display = 'none';
+                startBtn.classList.remove('hidden');
+                startBtn.classList.add('block');
+            }
+
+            if (gameState !== 'PLAYING') return;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0]; // Use first hand detected
+                
+                // Track center of hand (using MCP of middle finger as rough center)
+                const center = landmarks[9]; 
+                
+                // Mirrored coordinates for webcam
+                handX = -(center.x * 2 - 1); 
+                handY = -(center.y * 2 - 1);
+
+                // Determine Gesture
+                wasFist = isFist;
+                isFist = checkFist(landmarks);
+
+                handleGestureInput();
+            }
+        }
+
+        async function initMediaPipe() {
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+            hands.onResults(onResults);
+
+            const cameraUtil = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+            cameraUtil.start();
+        }
+
+        function handleGestureInput() {
+            if (!canPunch) return;
+
+            // Cursor smoothing
+            mouseVector.x += (handX - mouseVector.x) * 0.3;
+            mouseVector.y += (handY - mouseVector.y) * 0.3;
+
+            // Move 3D Cursor to match hand position in NDC space
+            // Projecting NDC to world space at z = 2
+            const vec = new THREE.Vector3(mouseVector.x, mouseVector.y, 0.5);
+            vec.unproject(camera);
+            const dir = vec.sub(camera.position).normalize();
+            const distance = (2 - camera.position.z) / dir.z; // Cursor depth Z = 2
+            const pos = camera.position.clone().add(dir.multiplyScalar(distance));
+            
+            if (cursorGlove.position.z >= 2) { // Only update XY if not currently punching deeply
+                cursorGlove.position.x = pos.x;
+                cursorGlove.position.y = pos.y;
+            }
+
+            // Visual feedback for FIST (Charging)
+            if (isFist) {
+                cursorGlove.scale.set(0.7, 0.7, 0.7);
+                cursorGlove.material.color.setHex(0xf97316); // Orange-ish when grabbed
+            } else {
+                cursorGlove.scale.set(1, 1, 1);
+                cursorGlove.material.color.setHex(0xef4444); // Red when open
+            }
+
+            // Trigger PUNCH on Release (was fist, now open)
+            if (wasFist && !isFist) {
+                executePunch();
+            }
+        }
+
+        function executePunch() {
+            canPunch = false;
+            
+            // Raycast to find target
+            raycaster.setFromCamera(mouseVector, camera);
+            const intersects = raycaster.intersectObjects([leftTargetBox, rightTargetBox]);
+
+            // Animate glove punching forward
+            const originalZ = 2;
+            const targetZ = intersects.length > 0 ? intersects[0].object.position.z + 1 : -10;
+
+            let punchProgress = 0;
+            const punchAnim = setInterval(() => {
+                punchProgress += 0.15;
+                if (punchProgress <= 1) {
+                    // Move forward
+                    cursorGlove.position.z = THREE.MathUtils.lerp(originalZ, targetZ, punchProgress);
+                } else if (punchProgress > 1 && punchProgress <= 2) {
+                    // Check collision exactly at apex of punch
+                    if (punchProgress > 1 && punchProgress < 1.2 && intersects.length > 0) {
+                        handleTargetHit(intersects[0].object);
+                        intersects.length = 0; // Prevent multiple hits
+                    }
+                    // Move back
+                    cursorGlove.position.z = THREE.MathUtils.lerp(targetZ, originalZ, punchProgress - 1);
+                } else {
+                    clearInterval(punchAnim);
+                    cursorGlove.position.z = originalZ;
+                    // Cooldown
+                    setTimeout(() => { canPunch = true; }, 300);
+                }
+            }, 16);
+        }
+
+        function handleTargetHit(object) {
+            const isCorrect = object.userData.isCorrect;
+            createParticles(object.position, isCorrect ? 0x22c55e : 0xef4444); // Green or Red
+
+            if (isCorrect) {
+                // Correct
+                score += 10;
+                scoreEl.innerText = score;
+                object.scale.set(1.2, 1.2, 1.2);
+                setTimeout(() => object.scale.set(1,1,1), 200);
+                nextQuestion();
+            } else {
+                // Wrong
+                lives--;
+                livesEl.innerText = lives;
+                // Camera shake effect
+                const ogX = camera.position.x;
+                let shake = 5;
+                const shakeInt = setInterval(() => {
+                    camera.position.x = ogX + (Math.random() - 0.5) * 0.5;
+                    shake--;
+                    if (shake <= 0) {
+                        camera.position.x = ogX;
+                        clearInterval(shakeInt);
+                    }
+                }, 50);
+
+                if (lives <= 0) {
+                    endGame();
+                }
+            }
+        }
+
+        function createParticles(position, colorHex) {
+            const particleCount = 20;
+            const geo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+            const mat = new THREE.MeshBasicMaterial({ color: colorHex });
+
+            for(let i=0; i<particleCount; i++) {
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.copy(position);
+                
+                // Random velocity
+                const velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.5,
+                    (Math.random() - 0.5) * 0.5,
+                    (Math.random() - 0.5) * 0.5
+                );
+                
+                scene.add(mesh);
+                particles.push({ mesh, velocity, life: 1.0 });
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.mesh.position.add(p.velocity);
+                p.mesh.rotation.x += 0.1;
+                p.mesh.rotation.y += 0.1;
+                p.life -= 0.05;
+                p.mesh.material.opacity = p.life;
+                p.mesh.material.transparent = true;
+
+                if (p.life <= 0) {
+                    scene.remove(p.mesh);
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateParticles();
+            
+            // Idle animation for targets
+            if (leftTargetBox && rightTargetBox && gameState === 'PLAYING') {
+                leftTargetBox.position.y = Math.sin(Date.now() * 0.002) * 0.2;
+                rightTargetBox.position.y = Math.cos(Date.now() * 0.002) * 0.2;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function startGame() {
+            startScreen.classList.add('hidden');
+            hudStats.classList.remove('hidden');
+            hudStats.classList.add('flex');
+            hudTimer.classList.remove('hidden');
+            hudTimer.classList.add('flex');
+            questionBanner.classList.remove('hidden');
+            
+            gameState = 'PLAYING';
+            currentQuestion = 0;
+            score = 0;
+            lives = 3;
+            
+            scoreEl.innerText = score;
+            livesEl.innerText = lives;
+            
+            onWindowResize(); // Ensure layout fits
+            loadQuestion();
+        }
+
+        function loadQuestion() {
+            if (currentQuestion >= quizData.length) {
+                endGame(true); // Win
+                return;
+            }
+
+            levelEl.innerText = currentQuestion + 1;
+            const q = quizData[currentQuestion];
+            questionText.innerText = q.q;
+            
+            // Slide in animation for banner
+            questionBanner.classList.remove('show');
+            setTimeout(() => questionBanner.classList.add('show'), 100);
+
+            updateTargetsContent();
+            resetTimer();
+        }
+
+        function nextQuestion() {
+            clearInterval(timerInterval);
+            currentQuestion++;
+            setTimeout(loadQuestion, 1000); // Small delay before next
+        }
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            timer = 15;
+            timerEl.innerText = timer;
+            
+            timerInterval = setInterval(() => {
+                timer--;
+                timerEl.innerText = timer;
+                if (timer <= 5) {
+                    timerEl.classList.add('text-red-500', 'anim-pulse');
+                } else {
+                    timerEl.classList.remove('text-red-500', 'anim-pulse');
+                }
+
+                if (timer <= 0) {
+                    clearInterval(timerInterval);
+                    lives--;
+                    livesEl.innerText = lives;
+                    if (lives <= 0) {
+                        endGame();
+                    } else {
+                        nextQuestion(); // Move on if out of time but alive
+                    }
+                }
+            }, 1000);
+        }
+
+        function endGame(won = false) {
+            gameState = 'GAMEOVER';
+            clearInterval(timerInterval);
+            
+            hudStats.classList.add('hidden');
+            hudTimer.classList.add('hidden');
+            questionBanner.classList.remove('show');
+            
+            setTimeout(() => {
+                gameoverScreen.classList.remove('hidden');
+                document.getElementById('final-score').innerText = score;
+                const msg = document.getElementById('gameover-msg');
+                const title = document.getElementById('gameover-title');
+                
+                if (won || score > 70) {
+                    title.innerText = "TAHNIAH!";
+                    title.classList.replace('text-red-600', 'text-green-500');
+                    msg.innerText = "Anda seorang Chef yang hebat dan berhati-hati!";
+                } else {
+                    title.innerText = "TAMAT!";
+                    msg.innerText = "Terus belajar dan cuba lagi untuk jadi lebih selamat di dapur.";
+                }
+            }, 500);
+        }
+
+        // Initialize Everything
+        window.onload = () => {
+            initThreeJS();
+            initMediaPipe();
+            startBtn.addEventListener('click', startGame);
+        };
+
+    </script>
+</body>
+</html>
